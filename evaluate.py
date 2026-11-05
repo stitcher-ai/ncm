@@ -18,8 +18,10 @@ def main():
 
     cfg = OmegaConf.load(args.config)
     gpus = args.gpus.split(",") if args.gpus else [str(i) for i in range(torch.cuda.device_count())]
-    if not gpus:
-        sys.exit("no GPU visible; pass --gpus")
+    # No CUDA (e.g. Apple Silicon): run one shard on MPS/CPU; eval_shard picks the device via NCM_DEVICE.
+    local = not gpus
+    if local:
+        gpus = ["local"]
     out = args.out or os.path.join("eval", cfg.task)
     os.makedirs(out, exist_ok=True)
 
@@ -27,7 +29,9 @@ def main():
               "--nshards", str(len(gpus))] + (["--n", str(args.n)] if args.n else []) + passthrough
     procs = []
     for k, gpu in enumerate(gpus):
-        env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu, TOKENIZERS_PARALLELISM="false")
+        env = dict(os.environ, TOKENIZERS_PARALLELISM="false")
+        if not local:
+            env["CUDA_VISIBLE_DEVICES"] = gpu
         log = open(os.path.join(out, f"shard_{k}.log"), "w")
         procs.append(subprocess.Popen(
             [sys.executable, os.path.join(ROOT, "scripts", "eval_shard.py"), *common,

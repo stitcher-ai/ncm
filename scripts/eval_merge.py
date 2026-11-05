@@ -1,5 +1,6 @@
 import argparse, glob, os, pickle, sys
 import numpy as np
+import torch
 from omegaconf import OmegaConf
 sys.path.insert(0, os.environ.get("NCM_ROOT", os.getcwd()))
 
@@ -7,6 +8,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--config", required=True)
 ap.add_argument("--glob", required=True)
 a = ap.parse_args()
+DEV = os.environ.get("NCM_DEVICE") or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 
 CFG = OmegaConf.load(a.config)
 parts = [pickle.load(open(f, "rb")) for f in sorted(glob.glob(a.glob))]
@@ -40,7 +42,7 @@ def rouge():
 
     sc = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
     g2 = AutoTokenizer.from_pretrained("gpt2")
-    lm = AutoModelForCausalLM.from_pretrained("gpt2").cuda().eval()
+    lm = AutoModelForCausalLM.from_pretrained("gpt2").to(DEV).eval()
 
     R = {k: [] for k in ("rouge1", "rouge2", "rougeL")}
     for h, r in zip(hyps, refs):
@@ -48,7 +50,7 @@ def rouge():
         for k in R:
             R[k].append(v[k].fmeasure)
     with torch.no_grad():
-        gp = generation_perplexity(lm, g2, [""] * len(hyps), hyps, device="cuda",
+        gp = generation_perplexity(lm, g2, [""] * len(hyps), hyps, device=DEV,
                                    score_only_generated=True, batch_size=32).mean_ppl
     print(f"{'R-1':>7} {'R-2':>7} {'R-L':>7} {'genPPL':>8} {'words':>7}")
     print(f"{100 * np.mean(R['rouge1']):7.2f} {100 * np.mean(R['rouge2']):7.2f} {100 * np.mean(R['rougeL']):7.2f} "
@@ -85,7 +87,7 @@ def genppl():
 
     ref = str(CFG.eval.ref_model)
     rtok = AutoTokenizer.from_pretrained(ref)
-    rlm = AutoModelForCausalLM.from_pretrained(ref).cuda().eval()
+    rlm = AutoModelForCausalLM.from_pretrained(ref).to(DEV).eval()
 
     def entropy(ids):
         c, m = Counter(ids), len(ids)
@@ -118,11 +120,11 @@ def genppl_flm():
     rtok = AutoTokenizer.from_pretrained(ref)
     if rtok.pad_token is None:
         rtok.pad_token = rtok.eos_token
-    rlm = AutoModelForCausalLM.from_pretrained(ref).cuda().eval()
+    rlm = AutoModelForCausalLM.from_pretrained(ref).to(DEV).eval()
 
     def corpus_ppl(texts):
         enc = rtok(texts, return_tensors="pt", return_token_type_ids=False, truncation=True, padding=True, max_length=128)
-        ids, attn = enc["input_ids"].cuda(), enc["attention_mask"].cuda()
+        ids, attn = enc["input_ids"].to(DEV), enc["attention_mask"].to(DEV)
         nll_sum = tok_sum = 0.0
         with torch.no_grad():
             for i in range(0, ids.shape[0], 16):
